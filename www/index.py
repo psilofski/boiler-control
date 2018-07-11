@@ -1,0 +1,276 @@
+#!/usr/bin/env python
+
+#shutdown: os.system('/sbin/shutdown -r now')
+
+#import web
+import sqlite3 as sql
+from datetime import datetime
+import time
+import cgi
+import cgitb; cgitb.enable()  # for troubleshooting
+
+Tth1_limit_default = [55, 49, 49, 49, 49, 49, 55, 55, 55, 55, 55, 49, 49, 49, 49, 50,
+                50, 50, 55, 55, 55, 55, 55, 55]
+
+fmt = '%Y-%m-%d %H:%M:%S'
+timestamp = datetime.now().strftime(fmt)
+
+
+path_sensors = '/home/pi/thermo-dev/'
+path_www = '/home/pi/www/'
+db_param_file = '/home/pi/thermo-dev/data/parameters.db' #path_www + './data/parameters.db'
+conn_param = sql.connect(db_param_file)
+#initializing database if not exists:
+with conn_param:
+    c = conn_param.cursor()
+
+    tb_exists = " SELECT name FROM sqlite_master WHERE type='table' AND name='toggles' "
+    if not c.execute(tb_exists).fetchone():
+        c.execute( '''CREATE TABLE toggles
+            (manual text, th1 integer, th2 integer, timestamp text) ''')
+        c.execute( '''INSERT INTO toggles VALUES
+            (?,?,?,?)''', ( 'a', 1, 1, timestamp ) )
+
+    tb_exists = " SELECT name FROM sqlite_master WHERE type='table' AND name='temperatures' "
+    if not c.execute(tb_exists).fetchone():
+        Tth1_limit_default.append(timestamp) # workaround so when I enter in db there is no issue
+        c.execute( '''CREATE TABLE temperatures
+        (h00 integer, h01 integer, h02 integer, h03 integer, h04 integer, h05 integer, h06 integer, h07 integer, h08 integer, h09 integer, h10 integer, h11 integer, h12 integer, h13 integer, h14 integer, h15 integer, h16 integer, h17 integer, h18 integer, h19 integer, h20 integer, h21 integer, h22 integer, h23 integer, timestamp text ) ''')
+        c.execute( '''INSERT INTO temperatures VALUES
+            (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''', ( [i for i in Tth1_limit_default] ) )
+
+db_sens_file = path_sensors + './data/tempResearch_' + datetime.now().strftime('%Y') + '.db'
+conn_sens = sql.connect(db_sens_file)
+
+
+def check_if_toggled(var):
+    if var == 'm' or var == 0:
+        res = 'checked'
+    else:
+        res = ''
+    return res
+
+if __name__ == "__main__":
+
+# Read form
+    form = cgi.FieldStorage()
+    input = {}
+    for key in form.keys():
+        input[key] = form[key].value
+
+#    print "Content-type: text/html\r\n" #debug
+#    print input #debug
+
+    if "form_type" in input:
+
+        if input["form_type"] == "toggle_th":
+            if 'toggle_manual' in input:
+                toggle_manual = 'm'
+            else:
+                toggle_manual = 'a'
+            if 'toggle_th1' in input:
+                manual_th1 = 0
+            else:
+                manual_th1 = 1
+            if 'toggle_th2' in input:
+                manual_th2 = 0
+            else:
+                manual_th2 = 1
+
+            with conn_param:
+                c = conn_param.cursor()
+
+                c.execute( '''INSERT INTO toggles VALUES
+                    (?,?,?,?)''', (toggle_manual, manual_th1, manual_th2, timestamp) )
+
+            time.sleep(4) #allow time for the thermo-dev to read changes from the db
+        
+        elif input['form_type'] == 'change_temperatures':
+            new_temps = []
+            for i in sorted(input)[:-1]: #exclude last entry ("form_type")
+                new_temps.append(input[i])
+
+            new_temps.append( time.time() )
+
+#            print new_temps #debug
+            with conn_param:
+                c = conn_param.cursor()
+
+                c.execute( '''INSERT INTO temperatures VALUES
+                    (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''', ( [i for i in new_temps] ) )
+
+            time.sleep(4) #allow time for the thermo-dev to read changes from the db
+
+    try:
+        with conn_sens:
+            c = conn_sens.cursor()
+
+            c.execute( '''SELECT * FROM power order by rowid desc limit 1;''' )
+            data_power = c.fetchone()
+
+            c.execute( '''SELECT * FROM sensors order by rowid desc limit 1;''' )
+            data_sensors = c.fetchone()
+
+    except sql.Error, e:
+        
+        print 'Error %s:' % e.args[0]
+        sys.exit(1)
+
+    try:
+        with conn_param:
+            c = conn_param.cursor()
+
+            c.execute( '''SELECT * FROM temperatures order by rowid desc limit 1;''' )
+            data_temps = c.fetchone()
+
+            c.execute( '''SELECT * FROM toggles order by rowid desc limit 1;''' )
+            data_toggles = c.fetchone()
+#            c.execute( '''SELECT * FROM temperatures order by rowid desc limit 1;''' )
+
+    except sql.Error, e:
+        
+        print 'Error %s:' % e.args[0]
+        
+        sys.exit(1)
+
+        conn_sens.close()
+        conn_param.close()
+#    T1 = data_sensors[2]
+#    T2 = data_sensors[3]
+#    T3 = data_sensors[4]
+#    T4 = data_sensors[5]
+#    Tfuse1 = data_sensors[6]
+#    Tfuse2 = data_sensors[7]
+#    Tfuse3 = data_sensors[8]
+    Vin_state = data_sensors[9]
+    th1_state = data_sensors[10]
+    th2_state = data_sensors[11]
+
+    print "Content-type: text/html\r\n"
+#    print input #debug
+    #print Vin_state #debug
+    print """
+    <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EL"
+     "http://www.w3.org/TR/xhtml1/DTD xhml1-strict.dtd">
+    <html xmlns='http://www.w3.org/1999/html' lang='en' xml:lang='en'>
+    
+    <head>
+     <link rel="stylesheet" type="text/css" href="./css/styles.css" />
+     <script type="text/javascript" src="./js/jquery-3.2.0.min.js"></script>
+     
+     <script type="text/javascript">
+      $(document).ready(function() {
+        
+        var $toggle_manual = $( "input[name='toggle_manual']" )
+        var $toggle_th1 = $( "input[name='toggle_th1']" )
+        var $toggle_th2 = $( "input[name='toggle_th2']" )
+        
+        if ( !$toggle_manual.is(':checked') ) {
+          $(".toggle_boilers").hide()
+        }
+
+        $toggle_manual.on("click", function() {
+          if ( $toggle_manual.is(':checked') ) {
+            $(".toggle_boilers").show()
+          } else {
+            console.log( $toggle_th1.val() )
+            $(".toggle_boilers").hide()
+          }
+        })
+
+      })
+     </script>
+       
+    </head>
+    <body>
+    """
+
+    print """<p id="testing">""", data_sensors[0], "</p>" #debug
+    print """
+     <p style="color:%s"><em>Power is %s</em></p>
+    """ % ( ('green', 'grey')[Vin_state], ('ok!', 'down!')[Vin_state] )
+
+    color_state = ('red', 'blue')
+    print """
+    <form method="get" action="index.py">
+     <input type="hidden" name="form_type" value="toggle_th"/>
+     <table>
+      <tr>
+       <td>Auto</td>
+       <td>
+        <label class="switch">
+          <input type="checkbox" name="toggle_manual" %s>
+          <div class="slider manual"></div>
+        </label>
+       </td>
+       <td>Manual</td>
+      </tr>
+      <tr>
+       <td style="color:%s">Boiler final</td>
+       <td>
+        <label class="switch toggle_boilers">
+          <input type="checkbox" value="0" name="toggle_th1" %s>
+          <div class="slider round"></div>
+        </label>
+       </td>
+      </tr>
+      <tr>
+       <td style="color:%s">Boiler first</td>
+       <td>
+        <label class="switch toggle_boilers">
+          <input type="checkbox" value="0" name="toggle_th2" %s>
+          <div class="slider round"></div>
+        </label>
+       </td>
+      </tr>
+     </table>
+     <button type="submit">Submit!</button>
+    </form>
+    """ % ( check_if_toggled(data_toggles[0]), color_state[th1_state], check_if_toggled(th1_state), color_state[th2_state], check_if_toggled(th2_state) ) 
+
+    print '<img src="data/daily.png" />'
+
+    print """<table border="1"><tr>"""
+#    for i in ('T1', '<span style="color:red;">T2</span>', 'T3', 'T4', 'Tfuse1', 'Tfuse2', 'Tfuse3'):
+    for i in ('CPU', '<span style="color:red;">Water</span>', 'Envir', 'Envir', 'Tfuse1', 'Tfuse2', 'Tfuse3'):
+        print "<td><h3>%s</h3></td>" % i
+    print "</tr>"
+    print "<tr>"
+    for i in range( len(data_sensors) )[slice(2, 9)]:
+        print "<td>%s</td>" % data_sensors[i]
+    print """</tr></table><br/>""" 
+
+#    print data_power[0]
+    print 'Current draw per phase in Amperes: '
+    print """<table border="1"><tr>"""
+    for i in ('L1', 'L2', 'L3'):
+        print """<td><h3>%s</h3></td>""" % i
+    print "</tr><tr>"
+    for i in range( len(data_power) )[slice(1,4)]:
+        print """<td>%s</td>""" % data_power[i] 
+    print """</tr></table><br/>"""
+
+
+    print """
+     <p>%s</p>
+     <form method="get" action="index.py">
+     <table border="1"><tr>
+    """ % 'Change target temperatures here (per hour): ' #data_temps[-1] #timestamp
+    hours = ('00', '01', '02', '03', '04', '05', '06', '07', '08', '09', 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23)
+    for i in hours:#range( len(data_temps) )[:-1]: #[slice( 1, len(data_temps) )]:
+        print """<td>%s:</td>""" % i
+    print """</tr><tr>"""
+    for i in hours: #range( len(data_temps) )[slice( 1, len(data_temps) )]:
+        print """<td><input type="text" name="H_%s" value="%s" style="width:40px;"/></td>""" % ( i, data_temps[int(i)] )
+    print """
+     </tr></table>
+     <input type ="hidden" name="form_type" value="change_temperatures"/>
+     <button type="submit">Submit!</button>
+     </form>
+    """
+
+#    print [i for i in data_temps]
+    print '</p>'
+
+
+    print '</body>'
